@@ -798,16 +798,36 @@ fn add_proptest_dependency(doc: &mut DocumentMut) {
         doc.insert("dev-dependencies", Item::Table(dev_deps));
     }
 
-    // Add dep:proptest to test-support feature
+    // Define an explicit `proptest` feature that activates the optional dep, and
+    // wire it into `test-support`. Using a named feature (instead of a bare
+    // `dep:proptest` activation in test-support) ensures `#[cfg(feature = "proptest")]`
+    // gates in the source (e.g. gpui's color.rs property tests) resolve cleanly
+    // under `RUSTFLAGS: -Dwarnings`.
     if let Some(features) = doc.get_mut("features") {
         if let Some(table) = features.as_table_like_mut() {
+            if !table.contains_key("proptest") {
+                let mut arr = toml_edit::Array::new();
+                arr.push("dep:proptest");
+                table.insert("proptest", toml_edit::value(arr));
+            }
             if let Some(test_support) = table.get_mut("test-support") {
                 if let Some(arr) = test_support.as_array_mut() {
-                    // Check if dep:proptest is already there
-                    let has_proptest = arr.iter().any(|v| v.as_str() == Some("dep:proptest"));
-                    if !has_proptest {
-                        arr.push("dep:proptest");
+                    let has_proptest = arr
+                        .iter()
+                        .any(|v| matches!(v.as_str(), Some("proptest") | Some("dep:proptest")));
+                    // Drop any stale `dep:proptest` entry so we converge on the named feature.
+                    let mut new_arr = toml_edit::Array::new();
+                    for v in arr.iter() {
+                        if v.as_str() != Some("dep:proptest") {
+                            new_arr.push(v.clone());
+                        }
                     }
+                    if !has_proptest {
+                        new_arr.push("proptest");
+                    } else if !new_arr.iter().any(|v| v.as_str() == Some("proptest")) {
+                        new_arr.push("proptest");
+                    }
+                    *arr = new_arr;
                 }
             }
         }
