@@ -22,7 +22,7 @@ Versions track Zed releases: Zed `v1.2.7` becomes `gpui-unofficial` and `gpui-pl
 | `gpui-macos-unofficial` | macOS backend |
 | `gpui-linux-unofficial` | Linux backend |
 | `gpui-windows-unofficial` | Windows backend |
-| `gpui-web-unofficial` | Web/WASM backend |
+| `gpui-web-gpui-unofficial` | Web/WASM backend |
 
 Plus supporting crates: `collections-unofficial`, `scheduler-unofficial`, `refineable-unofficial`, etc.
 
