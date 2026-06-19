@@ -798,15 +798,34 @@ fn add_proptest_dependency(doc: &mut DocumentMut) {
         doc.insert("dev-dependencies", Item::Table(dev_deps));
     }
 
-    // Add dep:proptest to test-support feature
+    // Declare an explicit `proptest` feature and enable it from `test-support`.
+    //
+    // gpui gates code behind `#[cfg(feature = "proptest")]`. Upstream relies on
+    // Cargo's *implicit* feature for the optional `proptest` dependency, but our
+    // transform strips proptest (a git-only pin) and re-adds it here. The moment
+    // any feature references the dep with `dep:proptest` syntax, Cargo stops
+    // creating that implicit feature -- which turns `cfg(feature = "proptest")`
+    // into an "unexpected cfg" and fails the sync check under `-Dwarnings`.
+    // Declaring the feature explicitly keeps the gate valid regardless of how
+    // the dependency is referenced.
     if let Some(features) = doc.get_mut("features") {
         if let Some(table) = features.as_table_like_mut() {
+            // Explicit `proptest = ["dep:proptest"]` feature.
+            if !table.contains_key("proptest") {
+                let mut arr = toml_edit::Array::new();
+                arr.push("dep:proptest");
+                table.insert("proptest", Item::Value(Value::Array(arr)));
+            }
+            // Enable proptest from `test-support` using the feature name (matches
+            // upstream, which lists a bare `proptest`). Referencing the feature
+            // -- not `dep:proptest` -- avoids re-suppressing the implicit feature.
             if let Some(test_support) = table.get_mut("test-support") {
                 if let Some(arr) = test_support.as_array_mut() {
-                    // Check if dep:proptest is already there
-                    let has_proptest = arr.iter().any(|v| v.as_str() == Some("dep:proptest"));
-                    if !has_proptest {
-                        arr.push("dep:proptest");
+                    let already = arr
+                        .iter()
+                        .any(|v| matches!(v.as_str(), Some("proptest") | Some("dep:proptest")));
+                    if !already {
+                        arr.push("proptest");
                     }
                 }
             }
@@ -913,5 +932,73 @@ fn write_metadata(output_dir: &Path, zed_tag: &str, zed_dir: &Path) -> Result<()
     fs::write(path, serde_json::to_string_pretty(&metadata)?)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// After `transform_dependencies` strips the git-only optional `proptest`
+    /// dep and `remove_dep_from_features` removes the bare `proptest` from
+    /// `test-support`, `add_proptest_dependency` must re-add proptest in a way
+    /// that keeps `#[cfg(feature = "proptest")]` a *known* cfg. That requires an
+    /// explicit `proptest` feature; otherwise the `dep:proptest` reference
+    /// suppresses Cargo's implicit feature and the gpui sync check fails under
+    /// `-Dwarnings` with `unexpected cfg condition value: proptest`.
+    #[test]
+    fn declares_explicit_proptest_feature_so_cfg_gate_is_known() {
+        // Mirrors the post-removal state of gpui's Cargo.toml.
+        let mut doc: DocumentMut = r#"
+[dependencies]
+collections = { version = "1" }
+
+[features]
+test-support = ["collections/test-support", "rand"]
+"#
+        .parse()
+        .unwrap();
+
+        add_proptest_dependency(&mut doc);
+
+        // Optional proptest dependency restored with the attr-macro feature.
+        let dep = doc["dependencies"]["proptest"].as_inline_table().unwrap();
+        assert_eq!(dep.get("optional").and_then(|v| v.as_bool()), Some(true));
+        assert!(
+            dep.get("features")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().any(|v| v.as_str() == Some("attr-macro")))
+                .unwrap_or(false),
+            "proptest dep should enable the attr-macro feature"
+        );
+
+        // An explicit `proptest = ["dep:proptest"]` feature must exist so the
+        // cfg gate is a known feature under -Dwarnings.
+        let proptest_feat = doc["features"]["proptest"]
+            .as_array()
+            .expect("explicit `proptest` feature must be declared");
+        assert!(
+            proptest_feat
+                .iter()
+                .any(|v| v.as_str() == Some("dep:proptest")),
+            "`proptest` feature should enable the optional dep via dep:proptest"
+        );
+
+        // test-support enables it by feature name, NOT `dep:proptest` (which
+        // would re-suppress the implicit feature we're trying to preserve).
+        let ts: Vec<String> = doc["features"]["test-support"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        assert!(
+            ts.contains(&"proptest".to_string()),
+            "test-support should enable the proptest feature by name"
+        );
+        assert!(
+            !ts.contains(&"dep:proptest".to_string()),
+            "test-support must not reference dep:proptest directly"
+        );
+    }
 }
 
