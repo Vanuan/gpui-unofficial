@@ -56,7 +56,7 @@ enum Commands {
     /// List crates in publish order
     ListCrates,
 
-    /// Verify that a release is fully complete: release branch + GitHub release  ← add this variant
+    /// Verify that a release is fully complete: release branch + GitHub release
     /// + all crates published to crates.io.
     ///
     /// Exits 0 if complete, 1 if anything is missing. Use as a CI skip-guard:
